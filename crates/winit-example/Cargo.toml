@@ -1,0 +1,11 @@
+[package]
+name = "winit-example"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.102"
+env_logger = "0.11.9"
+pollster = "0.4.0"
+wgpu = "27.0.1"
+winit = "0.30.12"
