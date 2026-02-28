@@ -299,3 +299,4 @@ This code looks (and is!) complicated as wgpu is very low level. even after all 
 Instead, we're simply clearing the screen (and setting a green background). we do not know how to draw anything yet.
 
 but, we can see how the window handle can be passed to WGPU for it to use it as a surface to draw on.
+

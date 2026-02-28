@@ -3,7 +3,7 @@ use std::sync::Arc;
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
-    event_loop::{ControlFlow, EventLoop, OwnedDisplayHandle},
+    event_loop::{ControlFlow, EventLoop},
     window::Window,
 };
 
