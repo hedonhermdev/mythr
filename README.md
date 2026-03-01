@@ -10,3 +10,11 @@ Focuses mostly on:
 
 
 See `log` folder for notes.
+
+## Setup
+
+After cloning, run the setup script to configure git filters that keep Obsidian image syntax locally while converting to standard Markdown for GitHub:
+
+```bash
+./hooks/setup.sh
+```

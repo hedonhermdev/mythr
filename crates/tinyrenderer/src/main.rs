@@ -2,18 +2,14 @@
 use image::{Rgb, RgbImage, imageops::flip_vertical_in_place};
 use std::{mem::swap, path::PathBuf};
 
-use crate::wavefront::{Vertex3, Wavefront};
-
-mod wavefront;
-
 const WHITE: Rgb<u8> = Rgb([255, 255, 255]);
 const RED: Rgb<u8> = Rgb([255, 0, 0]);
 const GREEN: Rgb<u8> = Rgb([0, 255, 0]);
 const BLUE: Rgb<u8> = Rgb([64, 128, 255]);
 const YELLOW: Rgb<u8> = Rgb([255, 200, 0]);
 
-const HEIGHT: u32 = 512;
-const WIDTH: u32 = 512;
+const HEIGHT: u32 = 128;
+const WIDTH: u32 = 128;
 
 type Point = (u32, u32);
 
@@ -59,54 +55,56 @@ fn line(img: &mut RgbImage, mut a: Point, mut b: Point, color: Rgb<u8>) {
     }
 }
 
-fn project_transform_scale(v: &Vertex3) -> Point {
-    // orthogonal projection
-    // front view (looking down z-axis)
-    let p = (v.0, v.1);
-
-    // [-1, 1] -> [0, 2]
-    let p = (p.0 + 1.0, p.1 + 1.0);
-
-    // [0, 2] -> [0, W], [0, 2] -> [0, H]
-    let p = (
-        p.0 * (WIDTH - 1) as f32 / 2.0,
-        p.1 * (HEIGHT - 1) as f32 / 2.0,
-    );
-
-    (p.0.round() as u32, p.1.round() as u32)
-}
-
-fn draw_wavefront(img: &mut RgbImage, wavefront: &Wavefront) {
-    for vertex in wavefront.vertices() {
-        let p = project_transform_scale(vertex);
-
-        point(img, p, WHITE);
+fn triangle(img: &mut RgbImage, mut a: Point, mut b: Point, mut c: Point, color: Rgb<u8>) {
+    if a.1 > b.1 {
+        swap(&mut a, &mut b);
+    }
+    if a.1 > c.1 {
+        swap(&mut a, &mut c);
     }
 
-    let vertices = wavefront.vertices();
+    if b.1 > c.1 {
+        swap(&mut b, &mut c);
+    }
 
-    for triangle in wavefront.triangles() {
-        let a = project_transform_scale(&vertices[triangle.0 - 1]);
-        let b = project_transform_scale(&vertices[triangle.1 - 1]);
-        let c = project_transform_scale(&vertices[triangle.2 - 1]);
+    let ax = a.0 as i32;
+    let ay = a.1 as i32;
 
-        line(img, a, b, RED);
-        line(img, b, c, RED);
-        line(img, c, a, RED);
+    let bx = b.0 as i32;
+    let by = b.1 as i32;
+
+    let cx = c.0 as i32;
+    let cy = c.1 as i32;
+
+    if a.1 != b.1 {
+        for y in a.1..=b.1 {
+            let x1 = ax + (y as i32 - ay) * (cx - ax) / (cy - ay);
+            let x2 = ax + (y as i32 - ay) * (bx - ax) / (by - ay);
+
+            for x in x1.min(x2)..x1.max(x2) {
+                img[(x as u32, y)] = color;
+            }
+        }
+    }
+
+    if c.1 != b.1 {
+        for y in b.1..=c.1 {
+            let x1 = ax + (y as i32 - ay) * (cx - ax) / (cy - ay);
+            let x2 = bx + (y as i32 - by) * (cx - bx) / (cy - by);
+
+            for x in x1.min(x2)..x1.max(x2) {
+                img[(x as u32, y)] = color;
+            }
+        }
     }
 }
 
 fn main() -> anyhow::Result<()> {
-    let path: PathBuf = std::env::args()
-        .nth(1)
-        .ok_or_else(|| anyhow::anyhow!("Usage: tinyrenderer <path_to_obj_file>"))?
-        .into();
-
-    let wavefront = Wavefront::read_from_file(&path)?;
-
     let mut img = RgbImage::new(WIDTH, HEIGHT);
 
-    draw_wavefront(&mut img, &wavefront);
+    triangle(&mut img, (7, 45), (35, 100), (45, 60), RED);
+    triangle(&mut img, (120, 35), (90, 5), (45, 110), WHITE);
+    triangle(&mut img, (115, 83), (80, 90), (85, 120), GREEN);
 
     // because the tutorial uses a different coordinate system than ours
     flip_vertical_in_place(&mut img);

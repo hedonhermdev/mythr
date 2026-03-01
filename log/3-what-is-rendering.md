@@ -53,7 +53,7 @@ fn main() -> anyhow::Result<()> {
 
 This should produce something like (scaled up): 
 
-![[rendering-points.png|300]]
+![rendering-points.png](./media/rendering-points.png)
 
 ## Step 1: Wireframes
 
@@ -121,7 +121,7 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
-![[rendering-line-1.png|300]]
+![rendering-line-1.png](./media/rendering-line-1.png)
 
 Why do we have gaps in the red line? We sample `t` an arbitrary `1/0.02 = 50` times. Whereas, there are `63-7=55` pixels between points A and C. 
 
@@ -157,7 +157,7 @@ fn line2(img: &mut RgbImage, mut a: Point, mut b: Point, color: Rgb<u8>) {
 
 This gives us lines without any gaps :) 
 
-![[rendering-line-2.png|300]]
+![rendering-line-2.png](./media/rendering-line-2.png)
 
 
 ### Optimizing our Line Drawing Function
@@ -465,7 +465,7 @@ fn main() -> anyhow::Result<()> {
 
 This gives us something like:
 
-![[rendering-wavefront-points.png]]
+![rendering-wavefront-points.png](./media/rendering-wavefront-points.png)
 We can already start seeing the shape :)
 
 Drawing lines is very easy now. 
@@ -494,4 +494,4 @@ fn draw_wavefront(img: &mut RgbImage, wavefront: &Wavefront) {
 
 Which gives us this beauty.
 
-![[Pasted image 20260301001723.png]]
+![Pasted image 20260301001723.png](./media/Pasted image 20260301001723.png)
