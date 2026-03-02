@@ -1,6 +1,13 @@
 #![allow(dead_code)]
-use image::{Rgb, RgbImage, imageops::flip_vertical_in_place};
-use std::{mem::swap, path::PathBuf};
+use image::{Pixel, Rgb, RgbImage, imageops::flip_vertical_in_place};
+use rayon::{iter::IndexedParallelIterator, slice::ParallelSliceMut};
+use std::path::PathBuf;
+
+use wavefront::Wavefront;
+
+use crate::wavefront::Vertex3;
+
+mod wavefront;
 
 const WHITE: Rgb<u8> = Rgb([255, 255, 255]);
 const RED: Rgb<u8> = Rgb([255, 0, 0]);
@@ -8,103 +15,109 @@ const GREEN: Rgb<u8> = Rgb([0, 255, 0]);
 const BLUE: Rgb<u8> = Rgb([64, 128, 255]);
 const YELLOW: Rgb<u8> = Rgb([255, 200, 0]);
 
-const HEIGHT: u32 = 128;
-const WIDTH: u32 = 128;
+const HEIGHT: u32 = 800;
+const WIDTH: u32 = 800;
 
 type Point = (u32, u32);
 
-#[inline(always)]
-fn point(img: &mut RgbImage, p: Point, color: Rgb<u8>) {
-    img[p] = color;
+fn find_bbox(a: Point, b: Point, c: Point) -> (Point, Point) {
+    let xmin = *[a.0, b.0, c.0].iter().min().unwrap();
+    let ymin = *[a.1, b.1, c.1].iter().min().unwrap();
+
+    let xmax = *[a.0, b.0, c.0].iter().max().unwrap();
+    let ymax = *[a.1, b.1, c.1].iter().max().unwrap();
+
+    ((xmin, ymin), (xmax, ymax))
 }
 
-#[inline(always)]
-fn line(img: &mut RgbImage, mut a: Point, mut b: Point, color: Rgb<u8>) {
-    let is_steeper = a.0.abs_diff(b.0) < a.1.abs_diff(b.1);
-
-    if is_steeper {
-        // transpose
-        a = (a.1, a.0);
-        b = (b.1, b.0);
-    }
-
-    if a.0 > b.0 {
-        swap(&mut a, &mut b);
-    }
-
-    let dx = (b.0 - a.0) as i32;
-    let dy = (b.1 as i32 - a.1 as i32).abs();
-
-    let mut error = dx / 2;
-    let ystep = if a.1 < b.1 { 1 } else { -1 };
-
-    let mut y = a.1 as i32;
-
-    for x in a.0..=b.0 {
-        if is_steeper {
-            img[(y as u32, x)] = color;
-        } else {
-            img[(x, y as u32)] = color;
-        }
-
-        error -= dy;
-        if error < 0 {
-            y += ystep;
-            error += dx;
+fn draw_bbox(img: &mut RgbImage, bbmin: Point, bbmax: Point, color: Rgb<u8>) {
+    for x in bbmin.0..bbmax.0 {
+        for y in bbmin.1..bbmax.1 {
+            img[(x, y)] = color;
         }
     }
 }
 
-fn triangle(img: &mut RgbImage, mut a: Point, mut b: Point, mut c: Point, color: Rgb<u8>) {
-    if a.1 > b.1 {
-        swap(&mut a, &mut b);
+fn signed_area(a: Point, b: Point, c: Point) -> f32 {
+    let [(ax, ay), (bx, by), (cx, cy)] = [a, b, c].map(|(x, y)| (x as f32, y as f32));
+
+    0.5 * ((bx - ax) * (cy - ay) - (by - ay) * (cx - ax))
+}
+
+fn triangle(img: &mut RgbImage, a: Point, b: Point, c: Point, color: Rgb<u8>) {
+    let (bbmin, bbmax) = find_bbox(a, b, c);
+
+    let area_abc = signed_area(a, b, c);
+
+    if area_abc < 1.0 {
+        return;
     }
-    if a.1 > c.1 {
-        swap(&mut a, &mut c);
-    }
 
-    if b.1 > c.1 {
-        swap(&mut b, &mut c);
-    }
+    let buf = img.as_mut();
 
-    let ax = a.0 as i32;
-    let ay = a.1 as i32;
+    let stride = WIDTH as usize * Rgb::<u8>::CHANNEL_COUNT as usize * size_of::<u8>();
 
-    let bx = b.0 as i32;
-    let by = b.1 as i32;
+    buf.par_chunks_mut(stride).enumerate().for_each(|(y, row)| {
+        if (bbmin.1..bbmax.1).contains(&(y as u32)) {
+            for x in bbmin.0..bbmax.0 {
+                let y = y as u32;
+                let p = (x, y);
 
-    let cx = c.0 as i32;
-    let cy = c.1 as i32;
+                let alpha = signed_area(p, b, c) / area_abc;
+                let beta = signed_area(a, p, c) / area_abc;
+                let gamma = signed_area(a, b, p) / area_abc;
 
-    if a.1 != b.1 {
-        for y in a.1..=b.1 {
-            let x1 = ax + (y as i32 - ay) * (cx - ax) / (cy - ay);
-            let x2 = ax + (y as i32 - ay) * (bx - ax) / (by - ay);
-
-            for x in x1.min(x2)..x1.max(x2) {
-                img[(x as u32, y)] = color;
+                if alpha > 0.0 && gamma > 0.0 && beta > 0.0 {
+                    let idx = (x * 3) as usize;
+                    row[idx..idx + 3].copy_from_slice(&color.0);
+                }
             }
         }
-    }
+    });
+}
 
-    if c.1 != b.1 {
-        for y in b.1..=c.1 {
-            let x1 = ax + (y as i32 - ay) * (cx - ax) / (cy - ay);
-            let x2 = bx + (y as i32 - by) * (cx - bx) / (cy - by);
+fn project_transform_scale(v: &Vertex3) -> Point {
+    // orthogonal projection
+    // front view (looking down z-axis)
+    let p = (v.0, v.1);
 
-            for x in x1.min(x2)..x1.max(x2) {
-                img[(x as u32, y)] = color;
-            }
-        }
+    // [-1, 1] -> [0, 2]
+    let p = (p.0 + 1.0, p.1 + 1.0);
+
+    // [0, 2] -> [0, W], [0, 2] -> [0, H]
+    let p = (
+        p.0 * (WIDTH - 1) as f32 / 2.0,
+        p.1 * (HEIGHT - 1) as f32 / 2.0,
+    );
+
+    (p.0.round() as u32, p.1.round() as u32)
+}
+
+fn draw_wavefront(img: &mut RgbImage, wavefront: &Wavefront) {
+    let vertices = wavefront.vertices();
+
+    for ft in wavefront.triangles() {
+        let a = project_transform_scale(&vertices[ft.0 - 1]);
+        let b = project_transform_scale(&vertices[ft.1 - 1]);
+        let c = project_transform_scale(&vertices[ft.2 - 1]);
+
+        let color: Rgb<u8> = Rgb(rand::random());
+
+        triangle(img, a, b, c, color);
     }
 }
 
 fn main() -> anyhow::Result<()> {
+    let path: PathBuf = std::env::args()
+        .nth(1)
+        .ok_or_else(|| anyhow::anyhow!("Usage: tinyrenderer <path_to_obj_file>"))?
+        .into();
+
+    let wavefront = Wavefront::read_from_file(&path)?;
+
     let mut img = RgbImage::new(WIDTH, HEIGHT);
 
-    triangle(&mut img, (7, 45), (35, 100), (45, 60), RED);
-    triangle(&mut img, (120, 35), (90, 5), (45, 110), WHITE);
-    triangle(&mut img, (115, 83), (80, 90), (85, 120), GREEN);
+    draw_wavefront(&mut img, &wavefront);
 
     // because the tutorial uses a different coordinate system than ours
     flip_vertical_in_place(&mut img);
