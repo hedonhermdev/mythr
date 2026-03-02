@@ -2,7 +2,6 @@
 date: 24/02/2026
 crate: crates/bevy-winit
 ---
-
 # Using Bevy with Winit
 
 ---

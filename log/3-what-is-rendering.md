@@ -466,6 +466,7 @@ fn main() -> anyhow::Result<()> {
 This gives us something like:
 
 ![rendering-wavefront-points.png](./media/rendering-wavefront-points.png)
+
 We can already start seeing the shape :)
 
 Drawing lines is very easy now. 
@@ -494,4 +495,5 @@ fn draw_wavefront(img: &mut RgbImage, wavefront: &Wavefront) {
 
 Which gives us this beauty.
 
-![Pasted image 20260301001723.png](./media/Pasted image 20260301001723.png)
+![rendering-wavefront-lines.png](./media/rendering-wavefront-lines.png)
+
