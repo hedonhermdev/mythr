@@ -206,7 +206,7 @@ fn triangle2(img: &mut RgbImage, a: Point, b: Point, c: Point, color: Rgb<u8>) {
             let beta = signed_area(a, p, c) / area_abc;
             let gamma = signed_area(a, b, p) / area_abc;
 
-            if alpha > 0.0 && gamma > 0.0 && beta > 0.0 {
+            if alpha >= 0.0 && gamma >= 0.0 && beta >= 0.0 {
                 img[(x, y)] = color;
             }
         }
@@ -309,7 +309,7 @@ fn triangle(img: &mut RgbImage, a: Point, b: Point, c: Point, color: Rgb<u8>) {
                 let beta = signed_area(a, p, c) / area_abc;
                 let gamma = signed_area(a, b, p) / area_abc;
 
-                if alpha > 0.0 && gamma > 0.0 && beta > 0.0 {
+                if alpha >= 0.0 && gamma >= 0.0 && beta >= 0.0 {
                     let idx = (x * 3) as usize;
                     row[idx..idx + 3].copy_from_slice(&color.0);
                 }

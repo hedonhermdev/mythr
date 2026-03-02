@@ -1,17 +1,19 @@
-use std::{fs::File, io::Read, path::Path};
+use std::{fs::File, io::Read, path::Path, slice::Iter};
 
 use anyhow::Context;
+use image::write_buffer_with_format;
+use nalgebra::Point3;
 
-pub type Vertex3 = (f32, f32, f32);
-pub type Triangle = (usize, usize, usize);
+pub type Vertex = Point3<f32>;
+pub type Triangle = [usize; 3];
 
 pub struct Wavefront {
-    vertices: Vec<Vertex3>,
+    vertices: Vec<Vertex>,
     triangles: Vec<Triangle>,
 }
 
 impl Wavefront {
-    fn new(vertices: Vec<Vertex3>, triangles: Vec<Triangle>) -> Self {
+    fn new(vertices: Vec<Vertex>, triangles: Vec<Triangle>) -> Self {
         Self {
             vertices,
             triangles,
@@ -47,57 +49,50 @@ impl Wavefront {
         })
     }
 
-    pub fn vertices(&self) -> &[(f32, f32, f32)] {
-        &self.vertices
+    pub fn vertices(&self) -> impl Iterator<Item = &Vertex> {
+        self.vertices.iter()
     }
 
-    pub fn triangles(&self) -> &[(usize, usize, usize)] {
-        &self.triangles
+    pub fn triangles(&self) -> impl Iterator<Item = [&Vertex; 3]> {
+        self.triangles.iter().map(|triangle| {
+            let [a, b, c] = triangle;
+
+            // wavefront triangles are 1-indexed
+            [
+                &self.vertices[*a - 1],
+                &self.vertices[*b - 1],
+                &self.vertices[*c - 1],
+            ]
+        })
     }
 }
 
-fn parse_vertex_line(l: &str) -> anyhow::Result<Vertex3> {
-    let mut iter = l.split(" ");
+fn parse_vertex_line(l: &str) -> anyhow::Result<Vertex> {
+    let [x, y, z] = l
+        .split_whitespace()
+        .skip(1)
+        .map(|v| v.parse::<f32>().context("expected vertex coord"))
+        .collect::<anyhow::Result<Vec<_>, _>>()?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("expected 3 coords"))?;
 
-    iter.next();
-
-    let x = iter.next().context("expected x coord")?.parse::<f32>()?;
-
-    let y = iter.next().context("expected y coord")?.parse::<f32>()?;
-
-    let z = iter.next().context("expected z coord")?.parse::<f32>()?;
-
-    Ok((x, y, z))
+    Ok(Point3::new(x, y, z))
 }
 
-fn parse_face_line(l: &str) -> anyhow::Result<Triangle> {
-    let mut iter = l.split(" ");
+fn parse_face_line(l: &str) -> anyhow::Result<[usize; 3]> {
+    let indices = l
+        .split_whitespace()
+        .skip(1) // skip the "f " prefix
+        .map(|v| {
+            v.split('/')
+                .next()
+                .context("expected index")?
+                .parse::<usize>()
+                .map_err(Into::into)
+        })
+        .collect::<Result<Vec<_>, anyhow::Error>>()?;
 
-    iter.next();
-
-    let a = iter
-        .next()
-        .context("expected vertex")?
-        .split("/")
-        .next()
-        .context("expected index")?
-        .parse::<usize>()?;
-
-    let b = iter
-        .next()
-        .context("expected vertex")?
-        .split("/")
-        .next()
-        .context("expected index")?
-        .parse::<usize>()?;
-
-    let c = iter
-        .next()
-        .context("expected vertex")?
-        .split("/")
-        .next()
-        .context("expected index")?
-        .parse::<usize>()?;
-
-    Ok((a, b, c))
+    indices
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("expected exactly 3 vertices"))
 }
