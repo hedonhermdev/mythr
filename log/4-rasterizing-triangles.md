@@ -284,7 +284,7 @@ Which gives us a slightly better render. Still not good enough since we are not 
 We can see that our nested for loop is an [embarrassingly parallel](https://en.wikipedia.org/wiki/Embarrassingly_parallel) problem. But Rust does not allow us to share a mutable reference to the `img` object between threads. For this, we can get mutable handle to the underlying pixel buffer and promise the compiler to only operate on non-overlapping chunks (in our case, rows of the buffer). 
 
 ```rust
-use rayon::{iter::IndexedParallelIterator, slice::ParallelSliceMut};
+use rayon::prelude::*;
 
 fn triangle(img: &mut RgbImage, a: Point, b: Point, c: Point, color: Rgb<u8>) {
     let (bbmin, bbmax) = find_bbox(a, b, c);

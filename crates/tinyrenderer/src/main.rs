@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 use image::{Pixel, Rgb, RgbImage, imageops::flip_vertical_in_place};
-use rayon::{iter::IndexedParallelIterator, slice::ParallelSliceMut};
+use rayon::prelude::*;
 use std::path::PathBuf;
 
 use wavefront::Wavefront;
