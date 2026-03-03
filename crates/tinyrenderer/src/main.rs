@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use image::{GrayImage, Luma, Pixel, Rgb, RgbImage, imageops::flip_vertical_in_place};
+use image::{Pixel, Rgb, RgbImage, imageops::flip_vertical_in_place};
 use nalgebra::{Matrix3, Point2};
 use rayon::prelude::*;
 use std::{f32::consts::PI, path::PathBuf};
@@ -20,11 +20,11 @@ const WIDTH: u32 = 800;
 type Coord = Point2<u32>;
 
 fn bbox(a: Coord, b: Coord, c: Coord) -> (Coord, Coord) {
-    let xmin = *[a.x, b.x, c.x].iter().min().unwrap();
-    let ymin = *[a.y, b.y, c.y].iter().min().unwrap();
+    let xmin = (*[a.x, b.x, c.x].iter().min().unwrap()).clamp(0, WIDTH - 1);
+    let ymin = (*[a.y, b.y, c.y].iter().min().unwrap()).clamp(0, HEIGHT - 1);
 
-    let xmax = *[a.x, b.x, c.x].iter().max().unwrap();
-    let ymax = *[a.y, b.y, c.y].iter().max().unwrap();
+    let xmax = (*[a.x, b.x, c.x].iter().max().unwrap()).clamp(0, WIDTH - 1);
+    let ymax = (*[a.y, b.y, c.y].iter().max().unwrap()).clamp(0, HEIGHT - 1);
 
     (Coord::new(xmin, ymin), Coord::new(xmax, ymax))
 }
@@ -51,46 +51,48 @@ fn triangle(
 
     let area_abc = signed_area(a, b, c);
 
+    // if triangle is degenerate
     if area_abc == 0.0 {
         return;
     }
 
+    let inv_area = 1.0 / area_abc;
+
     let buf = img.as_mut();
 
-    let zbuf = z_buffer.as_mut();
+    let img_stride = WIDTH as usize * Rgb::<u8>::CHANNEL_COUNT as usize;
 
-    let rgb_stride = WIDTH as usize * Rgb::<u8>::CHANNEL_COUNT as usize * size_of::<u8>();
-
-    let gray_stride = WIDTH as usize * Luma::<u8>::CHANNEL_COUNT as usize * size_of::<u8>();
-
-    buf.par_chunks_mut(rgb_stride)
-        .zip(zbuf.par_chunks_mut(gray_stride))
+    buf.par_chunks_mut(img_stride)
+        .zip(z_buffer.par_chunks_mut(WIDTH as usize))
         .enumerate()
         .for_each(|(y, (img_row, zbuf_row))| {
-            if (bbmin.y..bbmax.y).contains(&(y as u32)) {
-                for x in bbmin.x..bbmax.x {
-                    let y = y as u32;
-                    let p = Coord::new(x, y);
+            let y = y as u32;
 
-                    let alpha = signed_area(p, b, c) / area_abc;
-                    let beta = signed_area(a, p, c) / area_abc;
-                    let gamma = signed_area(a, b, p) / area_abc;
+            if y < bbmin.y || y > bbmax.y {
+                return;
+            }
 
-                    let z = alpha * za + beta * zb + gamma * zc;
+            for x in bbmin.x..=bbmax.x {
+                let p = Coord::new(x, y);
 
-                    let z_idx = x as usize;
+                let alpha = signed_area(p, b, c) * inv_area;
+                let beta = signed_area(a, p, c) * inv_area;
+                let gamma = signed_area(a, b, p) * inv_area;
 
-                    if alpha >= 0.0 && gamma >= 0.0 && beta >= 0.0 && z >= zbuf_row[z_idx] {
-                        let img_idx = (x * 3) as usize;
-                        img_row[img_idx..img_idx + 3].copy_from_slice(&color.0);
-                        zbuf_row[z_idx] = z;
-                    }
+                let z = alpha * za + beta * zb + gamma * zc;
+
+                let z_idx = x as usize;
+
+                if alpha >= 0.0 && gamma >= 0.0 && beta >= 0.0 && z >= zbuf_row[z_idx] {
+                    let img_idx = (x * 3) as usize;
+                    img_row[img_idx..img_idx + 3].copy_from_slice(&color.0);
+                    zbuf_row[z_idx] = z;
                 }
             }
         });
 }
 
-fn project_transform_scale(v: &Vertex) -> Vertex {
+fn project(v: &Vertex) -> Vertex {
     // orthogonal projection
     // front view (looking down z-axis)
     // [-1, 1] -> [0, 2]
@@ -100,7 +102,7 @@ fn project_transform_scale(v: &Vertex) -> Vertex {
     let v = (
         v.0 * (WIDTH - 1) as f32 / 2.0,
         v.1 * (HEIGHT - 1) as f32 / 2.0,
-        v.2 * (255.0) / 2.0,
+        v.2,
     );
 
     Vertex::new(v.0, v.1, v.2)
@@ -126,12 +128,9 @@ fn persp(v: &Vertex) -> Vertex {
 }
 
 fn draw_wavefront(img: &mut RgbImage, wavefront: &Wavefront) {
-    let mut z_buffer = vec![0.0; (WIDTH * HEIGHT) as usize];
+    let mut z_buffer = vec![-f32::INFINITY; (WIDTH * HEIGHT) as usize];
 
-    for [a, b, c] in wavefront
-        .triangles()
-        .map(|t| t.map(|v| project_transform_scale(&rot(v))))
-    {
+    for [a, b, c] in wavefront.triangles().map(|t| t.map(|v| project(&rot(v)))) {
         let color: Rgb<u8> = Rgb(rand::random());
 
         triangle(img, &mut z_buffer, a, b, c, color);
@@ -147,16 +146,12 @@ fn main() -> anyhow::Result<()> {
     let wavefront = Wavefront::read_from_file(&path)?;
 
     let mut img = RgbImage::new(WIDTH, HEIGHT);
-    let mut z_buffer = GrayImage::new(WIDTH, HEIGHT);
 
     draw_wavefront(&mut img, &wavefront);
 
     // because the tutorial uses a different coordinate system than ours
     flip_vertical_in_place(&mut img);
     img.save("out.png")?;
-
-    flip_vertical_in_place(&mut z_buffer);
-    z_buffer.save("zbuffer.png")?;
 
     Ok(())
 }
