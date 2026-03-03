@@ -1,6 +1,7 @@
 #![allow(dead_code)]
-use image::{GrayImage, Luma, Rgb, RgbImage, imageops::flip_vertical_in_place};
+use image::{GrayImage, Luma, Pixel, Rgb, RgbImage, imageops::flip_vertical_in_place};
 use nalgebra::{Matrix3, Point2};
+use rayon::prelude::*;
 use std::{f32::consts::PI, path::PathBuf};
 
 use wavefront::{Vertex, Wavefront};
@@ -36,7 +37,7 @@ fn signed_area(a: Coord, b: Coord, c: Coord) -> f32 {
 
 fn triangle(
     img: &mut RgbImage,
-    z_buffer: &mut GrayImage,
+    z_buffer: &mut [f32],
     a: Vertex,
     b: Vertex,
     c: Vertex,
@@ -50,22 +51,43 @@ fn triangle(
 
     let area_abc = signed_area(a, b, c);
 
-    // switch to non-parallelized version for simplicity
-    for x in bbmin.x..bbmax.x {
-        for y in bbmin.y..bbmax.y {
-            let p = Coord::new(x, y);
-
-            let alpha = signed_area(p, b, c) / area_abc;
-            let beta = signed_area(a, p, c) / area_abc;
-            let gamma = signed_area(a, b, p) / area_abc;
-
-            let z = (alpha * za + beta * zb + gamma * zc).round() as u8;
-            if alpha >= 0.0 && gamma >= 0.0 && beta >= 0.0 && z >= z_buffer[(x, y)].0[0] {
-                img[(x, y)] = color;
-                z_buffer[(x, y)] = Luma([z]);
-            }
-        }
+    if area_abc == 0.0 {
+        return;
     }
+
+    let buf = img.as_mut();
+
+    let zbuf = z_buffer.as_mut();
+
+    let rgb_stride = WIDTH as usize * Rgb::<u8>::CHANNEL_COUNT as usize * size_of::<u8>();
+
+    let gray_stride = WIDTH as usize * Luma::<u8>::CHANNEL_COUNT as usize * size_of::<u8>();
+
+    buf.par_chunks_mut(rgb_stride)
+        .zip(zbuf.par_chunks_mut(gray_stride))
+        .enumerate()
+        .for_each(|(y, (img_row, zbuf_row))| {
+            if (bbmin.y..bbmax.y).contains(&(y as u32)) {
+                for x in bbmin.x..bbmax.x {
+                    let y = y as u32;
+                    let p = Coord::new(x, y);
+
+                    let alpha = signed_area(p, b, c) / area_abc;
+                    let beta = signed_area(a, p, c) / area_abc;
+                    let gamma = signed_area(a, b, p) / area_abc;
+
+                    let z = alpha * za + beta * zb + gamma * zc;
+
+                    let z_idx = x as usize;
+
+                    if alpha >= 0.0 && gamma >= 0.0 && beta >= 0.0 && z >= zbuf_row[z_idx] {
+                        let img_idx = (x * 3) as usize;
+                        img_row[img_idx..img_idx + 3].copy_from_slice(&color.0);
+                        zbuf_row[z_idx] = z;
+                    }
+                }
+            }
+        });
 }
 
 fn project_transform_scale(v: &Vertex) -> Vertex {
@@ -97,14 +119,22 @@ fn rot(v: &Vertex) -> Vertex {
     mat * v
 }
 
-fn draw_wavefront(img: &mut RgbImage, z_buffer: &mut GrayImage, wavefront: &Wavefront) {
+fn persp(v: &Vertex) -> Vertex {
+    let c = 3.0;
+
+    v / (1.0 - (v.z / c))
+}
+
+fn draw_wavefront(img: &mut RgbImage, wavefront: &Wavefront) {
+    let mut z_buffer = vec![0.0; (WIDTH * HEIGHT) as usize];
+
     for [a, b, c] in wavefront
         .triangles()
-        .map(|t| t.map(project_transform_scale))
+        .map(|t| t.map(|v| project_transform_scale(&rot(v))))
     {
         let color: Rgb<u8> = Rgb(rand::random());
 
-        triangle(img, z_buffer, a, b, c, color);
+        triangle(img, &mut z_buffer, a, b, c, color);
     }
 }
 
@@ -119,7 +149,7 @@ fn main() -> anyhow::Result<()> {
     let mut img = RgbImage::new(WIDTH, HEIGHT);
     let mut z_buffer = GrayImage::new(WIDTH, HEIGHT);
 
-    draw_wavefront(&mut img, &mut z_buffer, &wavefront);
+    draw_wavefront(&mut img, &wavefront);
 
     // because the tutorial uses a different coordinate system than ours
     flip_vertical_in_place(&mut img);

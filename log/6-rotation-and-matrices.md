@@ -9,7 +9,7 @@ crate: crates/tinyrenderer
 - rotation and projection
 ---
 
-For this chapter, I've refactored the code to use primitives from the `nalgebra` crate. 
+For this chapter, I've refactored the code to use primitives from the `nalgebra` crate. See this commit [c8cf09e](https://github.com/hedonhermdev/mythr/commit/c8cf09eea05e7447d0d5adc3a2e630553645195e) 
 
 First we'll try a basic rotation using a rotation matrix. 
 
@@ -43,7 +43,24 @@ fn draw_wavefront(img: &mut RgbImage, wavefront: &Wavefront) {
 }
 ```
 
-
+We get a rotated render of the model. 
 
 | ![rotation-1.png](./media/rotation-1.png) | ![rotation-2.png](./media/rotation-2.png) |
 | ------------------- | ------------------- |
+
+## Projection
+
+Instead of using an orthographic projection, we can use a central projection. This has one major advantage: closer objects appear larger than distant ones. For a camera located at `(0 0 3)`
+
+```rust
+fn persp(v: &Vertex) -> Vertex {
+    let c = 3.0;
+
+    v / (1.0 - (v.z / c))
+}
+```
+
+
+| ![rotation-3.png](./media/rotation-3.png) | ![rotation-4.png](./media/rotation-4.png) |
+| ------------------- | ------------------- |
+
