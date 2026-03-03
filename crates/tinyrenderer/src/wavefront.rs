@@ -1,7 +1,6 @@
-use std::{fs::File, io::Read, path::Path, slice::Iter};
+use std::{fs::File, io::Read, path::Path};
 
 use anyhow::Context;
-use image::write_buffer_with_format;
 use nalgebra::Point3;
 
 pub type Vertex = Point3<f32>;

@@ -1,7 +1,6 @@
 #![allow(dead_code)]
-use image::{Pixel, Rgb, RgbImage, imageops::flip_vertical_in_place};
-use nalgebra::Matrix3;
-use rayon::prelude::*;
+use image::{GrayImage, Luma, Rgb, RgbImage, imageops::flip_vertical_in_place};
+use nalgebra::{Matrix3, Point2};
 use std::{f32::consts::PI, path::PathBuf};
 
 use wavefront::{Vertex, Wavefront};
@@ -17,107 +16,95 @@ const YELLOW: Rgb<u8> = Rgb([255, 200, 0]);
 const HEIGHT: u32 = 800;
 const WIDTH: u32 = 800;
 
-type Coord = (u32, u32);
+type Coord = Point2<u32>;
 
-fn find_bbox(a: Coord, b: Coord, c: Coord) -> (Coord, Coord) {
-    let xmin = *[a.0, b.0, c.0].iter().min().unwrap();
-    let ymin = *[a.1, b.1, c.1].iter().min().unwrap();
+fn bbox(a: Coord, b: Coord, c: Coord) -> (Coord, Coord) {
+    let xmin = *[a.x, b.x, c.x].iter().min().unwrap();
+    let ymin = *[a.y, b.y, c.y].iter().min().unwrap();
 
-    let xmax = *[a.0, b.0, c.0].iter().max().unwrap();
-    let ymax = *[a.1, b.1, c.1].iter().max().unwrap();
+    let xmax = *[a.x, b.x, c.x].iter().max().unwrap();
+    let ymax = *[a.y, b.y, c.y].iter().max().unwrap();
 
-    ((xmin, ymin), (xmax, ymax))
-}
-
-fn draw_bbox(img: &mut RgbImage, bbmin: Coord, bbmax: Coord, color: Rgb<u8>) {
-    for x in bbmin.0..bbmax.0 {
-        for y in bbmin.1..bbmax.1 {
-            img[(x, y)] = color;
-        }
-    }
+    (Coord::new(xmin, ymin), Coord::new(xmax, ymax))
 }
 
 fn signed_area(a: Coord, b: Coord, c: Coord) -> f32 {
-    let [(ax, ay), (bx, by), (cx, cy)] = [a, b, c].map(|(x, y)| (x as f32, y as f32));
+    let [a, b, c] = [a, b, c].map(|p| p.cast::<f32>());
 
-    0.5 * ((bx - ax) * (cy - ay) - (by - ay) * (cx - ax))
+    0.5 * ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x))
 }
 
-fn triangle(img: &mut RgbImage, a: Coord, b: Coord, c: Coord, color: Rgb<u8>) {
-    let (bbmin, bbmax) = find_bbox(a, b, c);
+fn triangle(
+    img: &mut RgbImage,
+    z_buffer: &mut GrayImage,
+    a: Vertex,
+    b: Vertex,
+    c: Vertex,
+    color: Rgb<u8>,
+) {
+    let [za, zb, zc] = [a, b, c].map(|v| v[2]); // z-coords
+
+    let [a, b, c] = [a, b, c].map(|v| Coord::new(v[0] as u32, v[1] as u32));
+
+    let (bbmin, bbmax) = bbox(a, b, c);
 
     let area_abc = signed_area(a, b, c);
 
-    if area_abc < 1.0 {
-        return;
-    }
+    // switch to non-parallelized version for simplicity
+    for x in bbmin.x..bbmax.x {
+        for y in bbmin.y..bbmax.y {
+            let p = Coord::new(x, y);
 
-    let buf = img.as_mut();
+            let alpha = signed_area(p, b, c) / area_abc;
+            let beta = signed_area(a, p, c) / area_abc;
+            let gamma = signed_area(a, b, p) / area_abc;
 
-    let stride = WIDTH as usize * Rgb::<u8>::CHANNEL_COUNT as usize * size_of::<u8>();
-
-    buf.par_chunks_mut(stride).enumerate().for_each(|(y, row)| {
-        if (bbmin.1..bbmax.1).contains(&(y as u32)) {
-            for x in bbmin.0..bbmax.0 {
-                let y = y as u32;
-                let p = (x, y);
-
-                let alpha = signed_area(p, b, c) / area_abc;
-                let beta = signed_area(a, p, c) / area_abc;
-                let gamma = signed_area(a, b, p) / area_abc;
-
-                if alpha >= 0.0 && gamma >= 0.0 && beta >= 0.0 {
-                    let idx = (x * 3) as usize;
-                    row[idx..idx + 3].copy_from_slice(&color.0);
-                }
+            let z = (alpha * za + beta * zb + gamma * zc).round() as u8;
+            if alpha >= 0.0 && gamma >= 0.0 && beta >= 0.0 && z >= z_buffer[(x, y)].0[0] {
+                img[(x, y)] = color;
+                z_buffer[(x, y)] = Luma([z]);
             }
         }
-    });
+    }
+}
+
+fn project_transform_scale(v: &Vertex) -> Vertex {
+    // orthogonal projection
+    // front view (looking down z-axis)
+    // [-1, 1] -> [0, 2]
+    let v = (v.x + 1.0, v.y + 1.0, v.z + 1.0);
+
+    // [0, 2] -> [0, W], [0, 2] -> [0, H]
+    let v = (
+        v.0 * (WIDTH - 1) as f32 / 2.0,
+        v.1 * (HEIGHT - 1) as f32 / 2.0,
+        v.2 * (255.0) / 2.0,
+    );
+
+    Vertex::new(v.0, v.1, v.2)
 }
 
 fn rot(v: &Vertex) -> Vertex {
     let angle = PI / 6.0;
 
+    #[rustfmt::skip]
     let mat = Matrix3::new(
-        f32::cos(angle),
-        0.0,
-        f32::sin(angle),
-        0.0,
-        1.0,
-        0.0,
-        -f32::sin(angle),
-        0.0,
-        f32::cos(angle),
+        f32::cos(angle), 0.0, f32::sin(angle),
+        0.0, 1.0, 0.0,
+        -f32::sin(angle), 0.0, f32::cos(angle),
     );
 
     mat * v
 }
 
-fn project_transform_scale(v: &Vertex) -> Coord {
-    // orthogonal projection
-    // front view (looking down z-axis)
-    let p = (v[0], v[1]);
-
-    // [-1, 1] -> [0, 2]
-    let p = (p.0 + 1.0, p.1 + 1.0);
-
-    // [0, 2] -> [0, W], [0, 2] -> [0, H]
-    let p = (
-        p.0 * (WIDTH - 1) as f32 / 2.0,
-        p.1 * (HEIGHT - 1) as f32 / 2.0,
-    );
-
-    (p.0.round() as u32, p.1.round() as u32)
-}
-
-fn draw_wavefront(img: &mut RgbImage, wavefront: &Wavefront) {
-    for [a, b, c] in wavefront.triangles() {
+fn draw_wavefront(img: &mut RgbImage, z_buffer: &mut GrayImage, wavefront: &Wavefront) {
+    for [a, b, c] in wavefront
+        .triangles()
+        .map(|t| t.map(project_transform_scale))
+    {
         let color: Rgb<u8> = Rgb(rand::random());
-        let a = project_transform_scale(&rot(a));
-        let b = project_transform_scale(&rot(b));
-        let c = project_transform_scale(&rot(c));
 
-        triangle(img, a, b, c, color);
+        triangle(img, z_buffer, a, b, c, color);
     }
 }
 
@@ -130,12 +117,16 @@ fn main() -> anyhow::Result<()> {
     let wavefront = Wavefront::read_from_file(&path)?;
 
     let mut img = RgbImage::new(WIDTH, HEIGHT);
+    let mut z_buffer = GrayImage::new(WIDTH, HEIGHT);
 
-    draw_wavefront(&mut img, &wavefront);
+    draw_wavefront(&mut img, &mut z_buffer, &wavefront);
 
     // because the tutorial uses a different coordinate system than ours
     flip_vertical_in_place(&mut img);
     img.save("out.png")?;
+
+    flip_vertical_in_place(&mut z_buffer);
+    z_buffer.save("zbuffer.png")?;
 
     Ok(())
 }

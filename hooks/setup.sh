@@ -6,9 +6,10 @@
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
+FILTER="${REPO_ROOT}/hooks/obsidian-img-filter.sh"
 
-git config filter.obsidian-img.clean 'hooks/obsidian-img-filter.sh clean'
-git config filter.obsidian-img.smudge 'hooks/obsidian-img-filter.sh smudge'
+git config filter.obsidian-img.clean "'${FILTER}' clean"
+git config filter.obsidian-img.smudge "'${FILTER}' smudge"
 
 # Re-apply the smudge filter to existing files so the working tree
 # reflects Obsidian syntax even if they were checked out before setup.
