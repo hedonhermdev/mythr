@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 use image::{Pixel, Rgb, RgbImage, imageops::flip_vertical_in_place};
-use nalgebra::{Matrix3, Point2};
+use nalgebra::{Matrix3, Matrix4, Point2, Vector, Vector3, Vector4};
 use rayon::prelude::*;
 use std::{f32::consts::PI, path::PathBuf};
 
@@ -35,28 +35,34 @@ fn signed_area(a: Coord, b: Coord, c: Coord) -> f32 {
     0.5 * ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x))
 }
 
-fn triangle(
+fn rasterize(
     img: &mut RgbImage,
     z_buffer: &mut [f32],
-    a: Vertex,
-    b: Vertex,
-    c: Vertex,
+    viewport: Matrix4<f32>,
+    clip: [Vector4<f32>; 3],
     color: Rgb<u8>,
 ) {
-    let [za, zb, zc] = [a, b, c].map(|v| v[2]); // z-coords
+    // normalized device coordinates [x, y, z, w] -> [x/w, y/w, z/w, 1]
+    let ndc = clip.map(|c| c / c.w);
 
-    let [a, b, c] = [a, b, c].map(|v| Coord::new(v[0] as u32, v[1] as u32));
+    let screen = ndc.map(|n| (viewport * n).xy());
 
-    let (bbmin, bbmax) = bbox(a, b, c);
+    #[rustfmt::skip]
+    let abc = Matrix3::new(
+        screen[0].x, screen[0].y, 1.,
+        screen[1].x, screen[1].y, 1.,
+        screen[2].x, screen[2].y, 1.,
+    );
 
-    let area_abc = signed_area(a, b, c);
-
-    // if triangle is degenerate
-    if area_abc == 0.0 {
+    if abc.determinant() < 1. {
         return;
     }
 
-    let inv_area = 1.0 / area_abc;
+    let bbmin_x = screen[0].x.min(screen[1].x).min(screen[2].x).round() as u32;
+    let bbmin_y = screen[0].y.min(screen[1].y).min(screen[2].y).round() as u32;
+
+    let bbmax_x = screen[0].x.max(screen[1].x).max(screen[2].x).round() as u32;
+    let bbmax_y = screen[0].y.max(screen[1].y).max(screen[2].y).round() as u32;
 
     let buf = img.as_mut();
 
@@ -68,26 +74,30 @@ fn triangle(
         .for_each(|(y, (img_row, zbuf_row))| {
             let y = y as u32;
 
-            if y < bbmin.y || y > bbmax.y {
+            if y < bbmin_y || y > bbmax_y {
                 return;
             }
 
-            for x in bbmin.x..=bbmax.x {
-                let p = Coord::new(x, y);
+            for x in bbmin_x..=bbmax_x {
+                let v = Vector3::new(x as f32, y as f32, 1.);
 
-                let alpha = signed_area(p, b, c) * inv_area;
-                let beta = signed_area(a, p, c) * inv_area;
-                let gamma = signed_area(a, b, p) * inv_area;
+                let bc: Vector3<f32> = abc.try_inverse().unwrap().transpose() * v;
 
-                let z = alpha * za + beta * zb + gamma * zc;
+                if bc.x < 0. || bc.y < 0. || bc.z < 0. {
+                    continue;
+                }
+
+                let z = bc.dot(&Vector3::new(ndc[0].z, ndc[1].z, ndc[2].z));
 
                 let z_idx = x as usize;
 
-                if alpha >= 0.0 && gamma >= 0.0 && beta >= 0.0 && z >= zbuf_row[z_idx] {
-                    let img_idx = (x * 3) as usize;
-                    img_row[img_idx..img_idx + 3].copy_from_slice(&color.0);
-                    zbuf_row[z_idx] = z;
+                if z < zbuf_row[z_idx] {
+                    continue;
                 }
+
+                let img_idx = (x * 3) as usize;
+                img_row[img_idx..img_idx + 3].copy_from_slice(&color.0);
+                zbuf_row[z_idx] = z;
             }
         });
 }
@@ -127,13 +137,83 @@ fn persp(v: &Vertex) -> Vertex {
     v / (1.0 - (v.z / c))
 }
 
-fn draw_wavefront(img: &mut RgbImage, wavefront: &Wavefront) {
+fn viewport(x: u32, y: u32, w: u32, h: u32) -> Matrix4<f32> {
+    let x = x as f32;
+    let y = y as f32;
+    let w = w as f32;
+    let h = h as f32;
+
+    #[rustfmt::skip]
+    let viewport = Matrix4::new(
+        w/2., 0., 0., x + w/2.,
+        0., h/2., 0., y + h/2.,
+        0., 0., 1., 0.,
+        0.,0., 0., 1.
+    );
+
+    viewport
+}
+
+fn perspective(f: f32) -> Matrix4<f32> {
+    #[rustfmt::skip]
+    let perspective = Matrix4::new(
+        1., 0., 0., 0.,
+        0., 1., 0., 0.,
+        0., 0., 0., 1.,
+        0., 0., -1./f, 1.
+    );
+
+    perspective
+}
+
+fn look_at(eye: Vector3<f32>, center: Vector3<f32>, up: Vector3<f32>) -> Matrix4<f32> {
+    let n: Vector3<f32> = (eye - center).normalize();
+
+    let l = up.cross(&n).normalize();
+
+    let m = n.cross(&l).normalize();
+
+    #[rustfmt::skip]
+    let rotation = Matrix4::new(
+        l.x, l.y, l.z, 0.,
+        m.x, m.y, m.z, 0.,
+        n.x, n.y, n.z, 0.,
+        0., 0., 0., 1.
+    );
+
+    #[rustfmt::skip]
+    let translation = Matrix4::new(
+        1., 0., 0., -eye.x,
+        0., 1., 0., -eye.y,
+        0., 0., 1., -eye.z,
+        0., 0., 0., 1.,
+    );
+
+    rotation * translation
+}
+
+fn render(img: &mut RgbImage, wavefront: &Wavefront) {
     let mut z_buffer = vec![-f32::INFINITY; (WIDTH * HEIGHT) as usize];
 
-    for [a, b, c] in wavefront.triangles().map(|t| t.map(|v| project(&rot(v)))) {
+    let eye = Vector3::new(-1., 0., 2.);
+    let center = Vector3::new(0., 0., 0.);
+    let up = Vector3::new(0., 1., 0.);
+
+    let model_view = look_at(eye, center, up);
+    let perspective = perspective((eye - center).norm());
+
+    let viewport = viewport(WIDTH / 16, HEIGHT / 16, WIDTH * 7 / 8, HEIGHT * 7 / 8);
+
+    for clip in wavefront.triangles().map(|t| {
+        t.map(|v| {
+            let v = Vector4::new(v.x, v.y, v.z, 1.0);
+
+            perspective * model_view * v
+        })
+    }) {
         let color: Rgb<u8> = Rgb(rand::random());
 
-        triangle(img, &mut z_buffer, a, b, c, color);
+        rasterize(img, &mut z_buffer, viewport, clip, color);
     }
 }
 
@@ -147,7 +227,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut img = RgbImage::new(WIDTH, HEIGHT);
 
-    draw_wavefront(&mut img, &wavefront);
+    render(&mut img, &wavefront);
 
     // because the tutorial uses a different coordinate system than ours
     flip_vertical_in_place(&mut img);
